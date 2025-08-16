@@ -1,0 +1,61 @@
+---
+- name: Auto-tag ManageIQ pods
+  hosts: localhost
+  gather_facts: no
+  vars:
+    manageiq_url: "https://172.21.26.126:8443"
+    manageiq_user: "admin"
+    manageiq_password: "smartvm"
+    pod_id: 1186
+
+    prefix_map:
+      nipatbranch: channels_delivery
+
+
+  tasks:
+    - name: Get pod details
+      ansible.builtin.uri:
+        url: "{{ manageiq_url }}/api/container_groups/{{ pod_id }}"
+        method: GET
+        user: "{{ manageiq_user }}"
+        password: "{{ manageiq_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        return_content: yes
+        headers:
+          Accept: "application/json"
+      register: pod_response
+
+    - name: Extract pod name
+      set_fact:
+        pod_name: "{{ pod_response.json.name | lower }}"
+
+    - name: Match business unit
+      set_fact:
+        matched_bu: >-
+          {{ prefix_map[item] }}
+      loop: "{{ prefix_map.keys() }}"
+      when: pod_name is search(item)
+      register: bu_match
+
+    - name: Pick first matched business unit
+      set_fact:
+        business_unit: "{{ bu_match.results | selectattr('skipped','undefined') | map(attribute='ansible_facts.matched_bu') | first }}"
+
+    - name: Apply tag if matched
+      ansible.builtin.uri:
+        url: "{{ manageiq_url }}/api/container_groups/{{ pod_id }}/tags"
+        method: POST
+        user: "{{ manageiq_user }}"
+        password: "{{ manageiq_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          action: assign
+          resources:
+            - category: business_unit
+              name: "{{ business_unit }}"
+      when: business_unit is defined
